@@ -10,7 +10,9 @@ import fr.neatmonster.nocheatplus.hooks.NCPExemptionManager;
 import org.bukkit.*;
 import org.bukkit.block.ShulkerBox;
 import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
+import org.bukkit.entity.Item;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.player.PlayerTeleportEvent;
@@ -79,116 +81,309 @@ public class WaypointHelper {
 
                 //get all entities on the beacon
                 Objects.requireNonNull(Bukkit.getWorld(startWaypoint.getWorldName())).getNearbyEntities(startLoc, 0.5, 0.5, 0.5).forEach(entity -> {
-                    if (entity.getType() == EntityType.PLAYER && (!groupTeleporting || entity.getUniqueId().equals(player.getUniqueId()))) {
-                        WaypointManager waypointManager = Main.getWaypointManager();
-                        WaypointPlayer waypointPlayer = waypointManager.getPlayer(entity.getUniqueId());
-                        if (waypointPlayer == null) {
-                            waypointManager.addPlayer(entity.getUniqueId(), entity.getName());
-                            waypointPlayer = waypointManager.getPlayer(entity.getUniqueId());
-                        }
 
-                        //if launch is disabled
-                        if (!launchPlayer) {
-                            tpLoc.setDirection(entity.getLocation().getDirection());
-                            entity.teleport(tpLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
-                        } else {
-                            boolean ncpLoaded = Bukkit.getPluginManager().isPluginEnabled("NoCheatPlus");
-                            if (ncpLoaded)
-                                NCPExemptionManager.exemptPermanently(entity.getUniqueId(), CheckType.MOVING_CREATIVEFLY);
-                            waypointPlayer.setTeleporting(true);
+                    // --- CASE 1: PLAYER TELEPORTATION ---
+                    if (entity instanceof Player) {
+                        Player p = (Player) entity;
+                        if (!groupTeleporting || p.getUniqueId().equals(player.getUniqueId())) {
+                            WaypointManager waypointManager = Main.getWaypointManager();
+                            WaypointPlayer waypointPlayer = waypointManager.getPlayer(p.getUniqueId());
+                            if (waypointPlayer == null) {
+                                waypointManager.addPlayer(p.getUniqueId(), p.getName());
+                                waypointPlayer = waypointManager.getPlayer(p.getUniqueId());
+                            }
 
-                            ((Player) entity).closeInventory();
+                            // Ground level floor coordinate at the destination
+                            Location destinationFloor = new Location(Bukkit.getWorld(destinationCoord.getWorldName()), destinationCoord.getX() + 0.5, destinationCoord.getY() + 1, destinationCoord.getZ() + 0.5);
 
-                            if (!config.contains("launch-player-height"))
-                                config.set("launch-player-height", 576);
-                            int launchPlayerHeight = config.getInt("launch-player-height");
-                            int worldHeight = startLoc.getWorld().getMaxHeight();
-                            if (launchPlayerHeight < worldHeight)
-                                launchPlayerHeight = worldHeight;
-                            int startBeamTop = startBeaconStatus == 1 ? launchPlayerHeight : startBeaconStatus - 2;
-                            int destinationBeamTop = destinationBeaconStatus == 1 ? launchPlayerHeight : destinationBeaconStatus - 2;
-                            tpLoc.setY(destinationBeamTop);
-
-                            //keep players in start beam
-                            WaypointPlayer finalWaypointPlayer = waypointPlayer;
-                            new BukkitRunnable() {
-                                int time = 0;
-
-                                @Override
-                                public void run() {
-                                    //give entities resistance and levitation
-                                    ((LivingEntity) entity).addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 600, 255, false, false));
-                                    ((LivingEntity) entity).addPotionEffect(new PotionEffect(PotionEffectType.LEVITATION, 600, 127, false, false));
-
-                                    if (entity.getLocation().getY() < startBeamTop) {
-                                        Location startBeamLoc = new Location(entity.getWorld(), startLoc.getX(), entity.getLocation().getY(), startLoc.getZ());
-                                        if (entity.getLocation().distance(startBeamLoc) > 0.125) {
-                                            startBeamLoc.setDirection(entity.getLocation().getDirection());
-                                            entity.teleport(startBeamLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
-                                            entity.setVelocity(new Vector(0, 5, 0));
-                                        }
-                                        time++;
-
-                                        //let player go if they are stuck after 30 seconds
-                                        if (time >= 80) {
-                                            ((LivingEntity) entity).removePotionEffect(PotionEffectType.LEVITATION);
-                                            ((LivingEntity) entity).addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 600, 255, false, false));
-                                            Objects.requireNonNull(finalWaypointPlayer).setTeleporting(false);
-                                            this.cancel();
-                                        }
-                                    } else {
-                                        this.cancel();
-
-                                        //player pays fee
-                                        if (pay(player, startWaypoint, destinationWaypoint)) {
-                                            //teleport player to new beam
-                                            tpLoc.setDirection(entity.getLocation().getDirection());
-                                            if (ncpLoaded)
-                                                NCPExemptionManager.unexempt(entity.getUniqueId(), CheckType.MOVING_CREATIVEFLY);
-                                            entity.teleport(tpLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
-                                            entity.setVelocity(new Vector(0, -2, 0));
-                                            ((LivingEntity) entity).removePotionEffect(PotionEffectType.LEVITATION);
-
-                                            //keep players in destination beam
-                                            new BukkitRunnable() {
-                                                int time = 0;
-
-                                                @Override
-                                                public void run() {
-                                                    if (entity.getLocation().getY() > destinationWaypoint.getCoord().getY() + 1) {
-                                                        Location destinationBeamLoc = new Location(destinationCoord.getLocation().getWorld(), tpLoc.getX(), entity.getLocation().getY(), tpLoc.getZ());
-                                                        if (entity.getLocation().distance(destinationBeamLoc) > 0.125) {
-                                                            destinationBeamLoc.setDirection(entity.getLocation().getDirection());
-                                                            entity.teleport(destinationBeamLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
-                                                            entity.setVelocity(new Vector(0, -2, 0));
-                                                        }
-                                                        time++;
-
-                                                        //let player go if they are stuck after 30 seconds
-                                                        if (time >= 80) {
-                                                            ((LivingEntity) entity).addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 600, 255, false, false));
-                                                            Objects.requireNonNull(finalWaypointPlayer).setTeleporting(false);
-                                                            this.cancel();
-                                                        }
-                                                    } else {
-                                                        Objects.requireNonNull(finalWaypointPlayer).setTeleporting(false);
-                                                        this.cancel();
-                                                    }
-                                                }
-                                            }.runTaskTimer(plugin, 0, 5);
-                                        }
-                                        else {
-                                            entity.setVelocity(new Vector(0, -2, 0));
-                                            ((LivingEntity) entity).removePotionEffect(PotionEffectType.LEVITATION);
-                                        }
+                            // Find and temporarily detach any entities leashed to the player to prevent physical leash snaps
+                            List<LivingEntity> leashedEntities = new ArrayList<>();
+                            for (Entity nearby : p.getNearbyEntities(15.0, 15.0, 15.0)) {
+                                if (nearby instanceof LivingEntity) {
+                                    LivingEntity livingNearby = (LivingEntity) nearby;
+                                    if (livingNearby.isLeashed() && livingNearby.getLeashHolder() != null && livingNearby.getLeashHolder().getUniqueId().equals(p.getUniqueId())) {
+                                        leashedEntities.add(livingNearby);
                                     }
                                 }
-                            }.runTaskTimer(plugin, 0, 5);
+                            }
+
+                            // Untether them and delete the dropped lead item to avoid duplication glitches
+                            for (LivingEntity leashed : leashedEntities) {
+                                leashed.setLeashHolder(null);
+                                Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                                    if (leashed.isValid()) {
+                                        for (Entity nearbyItem : leashed.getNearbyEntities(2.0, 2.0, 2.0)) {
+                                            if (nearbyItem instanceof Item) {
+                                                Item item = (Item) nearbyItem;
+                                                String matName = item.getItemStack().getType().name();
+                                                if (matName.equals("LEAD") || matName.equals("LEASH")) {
+                                                    item.remove();
+                                                    break; // Remove only one lead per entity unleashed
+                                                }
+                                            }
+                                        }
+                                    }
+                                }, 1L);
+                            }
+
+                            // Check if the player is currently riding a mount/vehicle
+                            Entity vehicle = p.getVehicle();
+
+                            if (vehicle != null && !launchPlayer) {
+                                // Close inventory and deduct fee
+                                p.closeInventory();
+                                pay(player, startWaypoint, destinationWaypoint);
+
+                                // Safely dismount, teleport separately to prevent coordinate desync, and remount
+                                vehicle.eject();
+                                destinationFloor.setDirection(p.getLocation().getDirection());
+
+                                vehicle.teleport(destinationFloor, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                p.teleport(destinationFloor, PlayerTeleportEvent.TeleportCause.PLUGIN);
+
+                                // Schedule remounting 1 tick later for visual client sync
+                                Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                                    if (vehicle.isValid() && p.isOnline()) {
+                                        vehicle.addPassenger(p);
+                                    }
+                                }, 1L);
+
+                                // Teleport leashed entities directly
+                                teleportAndReleashEntities(plugin, p, leashedEntities, destinationFloor);
+                            }
+                            // Proceed with normal plugin logic for players without a mount
+                            else if (!launchPlayer) {
+                                tpLoc.setDirection(p.getLocation().getDirection());
+                                pay(player, startWaypoint, destinationWaypoint);
+                                p.teleport(tpLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
+
+                                // Teleport leashed entities directly
+                                teleportAndReleashEntities(plugin, p, leashedEntities, destinationFloor);
+                            } else {
+                                boolean ncpLoaded = Bukkit.getPluginManager().isPluginEnabled("NoCheatPlus");
+                                if (ncpLoaded)
+                                    NCPExemptionManager.exemptPermanently(p.getUniqueId(), CheckType.MOVING_CREATIVEFLY);
+                                waypointPlayer.setTeleporting(true);
+
+                                p.closeInventory();
+
+                                if (!config.contains("launch-player-height"))
+                                    config.set("launch-player-height", 576);
+                                int launchPlayerHeight = config.getInt("launch-player-height");
+                                int worldHeight = startLoc.getWorld().getMaxHeight();
+                                if (launchPlayerHeight < worldHeight)
+                                    launchPlayerHeight = worldHeight;
+                                int startBeamTop = startBeaconStatus == 1 ? launchPlayerHeight : startBeaconStatus - 2;
+                                int destinationBeamTop = destinationBeaconStatus == 1 ? launchPlayerHeight : destinationBeaconStatus - 2;
+                                tpLoc.setY(destinationBeamTop);
+
+                                // Keep track of the active traveling entity (vehicle or player)
+                                Entity travelEntity = (vehicle != null) ? vehicle : p;
+
+                                //keep players in start beam
+                                WaypointPlayer finalWaypointPlayer = waypointPlayer;
+                                new BukkitRunnable() {
+                                    int time = 0;
+
+                                    @Override
+                                    public void run() {
+                                        // If mounting entity became invalid during process, abort to prevent errors
+                                        if (vehicle != null && !vehicle.isValid()) {
+                                            p.removePotionEffect(PotionEffectType.LEVITATION);
+                                            releashEntitiesAtCurrentLocation(plugin, p, leashedEntities);
+                                            Objects.requireNonNull(finalWaypointPlayer).setTeleporting(false);
+                                            this.cancel();
+                                            return;
+                                        }
+
+                                        //give entities resistance and levitation
+                                        p.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 600, 255, false, false));
+                                        p.addPotionEffect(new PotionEffect(PotionEffectType.LEVITATION, 600, 127, false, false));
+                                        if (vehicle instanceof LivingEntity) {
+                                            LivingEntity lv = (LivingEntity) vehicle;
+                                            lv.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 600, 255, false, false));
+                                            lv.addPotionEffect(new PotionEffect(PotionEffectType.LEVITATION, 600, 127, false, false));
+                                        }
+
+                                        double currentY = travelEntity.getLocation().getY();
+                                        if (currentY < startBeamTop) {
+                                            Location startBeamLoc = new Location(travelEntity.getWorld(), startLoc.getX(), currentY, startLoc.getZ());
+                                            if (travelEntity.getLocation().distance(startBeamLoc) > 0.125) {
+                                                startBeamLoc.setDirection(travelEntity.getLocation().getDirection());
+                                                travelEntity.teleport(startBeamLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                                travelEntity.setVelocity(new Vector(0, 5, 0));
+                                            } else if (!(travelEntity instanceof LivingEntity)) {
+                                                // Apply manual upward velocity for non-living mounts (like boats or minecarts)
+                                                travelEntity.setVelocity(new Vector(0, 0.75, 0));
+                                            }
+                                            time++;
+
+                                            //let player go if they are stuck after 30 seconds
+                                            if (time >= 80) {
+                                                p.removePotionEffect(PotionEffectType.LEVITATION);
+                                                p.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 600, 255, false, false));
+                                                if (vehicle instanceof LivingEntity) {
+                                                    ((LivingEntity) vehicle).removePotionEffect(PotionEffectType.LEVITATION);
+                                                }
+                                                releashEntitiesAtCurrentLocation(plugin, p, leashedEntities);
+                                                Objects.requireNonNull(finalWaypointPlayer).setTeleporting(false);
+                                                this.cancel();
+                                            }
+                                        } else {
+                                            this.cancel();
+
+                                            //player pays fee
+                                            if (pay(player, startWaypoint, destinationWaypoint)) {
+                                                if (ncpLoaded)
+                                                    NCPExemptionManager.unexempt(p.getUniqueId(), CheckType.MOVING_CREATIVEFLY);
+                                                p.removePotionEffect(PotionEffectType.LEVITATION);
+                                                if (vehicle instanceof LivingEntity) {
+                                                    ((LivingEntity) vehicle).removePotionEffect(PotionEffectType.LEVITATION);
+                                                }
+
+                                                if (vehicle != null) {
+                                                    // Dismount to teleport securely (avoids coordinate desync), then teleport both to destination beam top
+                                                    vehicle.eject();
+                                                    tpLoc.setDirection(p.getLocation().getDirection());
+                                                    vehicle.teleport(tpLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                                    p.teleport(tpLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
+
+                                                    // Schedule remounting 2 ticks later for client sync, then begin downward descent
+                                                    Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                                                        if (vehicle.isValid() && p.isOnline()) {
+                                                            vehicle.addPassenger(p);
+                                                            vehicle.setVelocity(new Vector(0, -2, 0));
+                                                            startDestinationBeamKeeper(plugin, p, vehicle, vehicle, tpLoc, destinationWaypoint, destinationCoord, finalWaypointPlayer, leashedEntities, destinationFloor);
+                                                        } else {
+                                                            teleportAndReleashEntities(plugin, p, leashedEntities, destinationFloor);
+                                                            Objects.requireNonNull(finalWaypointPlayer).setTeleporting(false);
+                                                        }
+                                                    }, 2L);
+                                                } else {
+                                                    tpLoc.setDirection(p.getLocation().getDirection());
+                                                    p.teleport(tpLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                                    p.setVelocity(new Vector(0, -2, 0));
+                                                    startDestinationBeamKeeper(plugin, p, null, p, tpLoc, destinationWaypoint, destinationCoord, finalWaypointPlayer, leashedEntities, destinationFloor);
+                                                }
+                                            }
+                                            else {
+                                                travelEntity.setVelocity(new Vector(0, -2, 0));
+                                                p.removePotionEffect(PotionEffectType.LEVITATION);
+                                                if (vehicle instanceof LivingEntity) {
+                                                    ((LivingEntity) vehicle).removePotionEffect(PotionEffectType.LEVITATION);
+                                                }
+                                                releashEntitiesAtCurrentLocation(plugin, p, leashedEntities);
+                                                Objects.requireNonNull(finalWaypointPlayer).setTeleporting(false);
+                                            }
+                                        }
+                                    }
+                                }.runTaskTimer(plugin, 0, 5);
+                            }
+                        }
+                    }
+                    // --- CASE 2: NON-PLAYER ENTITY TELEPORTATION ---
+                    else if (groupTeleporting) {
+                        // Avoid double-teleporting a vehicle mount that has already been processed with its rider
+                        boolean isRiddenByTeleportingPlayer = false;
+                        for (Entity passenger : entity.getPassengers()) {
+                            if (passenger instanceof Player && (!groupTeleporting || passenger.getUniqueId().equals(player.getUniqueId()))) {
+                                isRiddenByTeleportingPlayer = true;
+                                break;
+                            }
+                        }
+
+                        if (!isRiddenByTeleportingPlayer) {
+                            // Check if the entity is a living mob or a dropped item
+                            if (entity instanceof LivingEntity || entity instanceof org.bukkit.entity.Item) {
+                                Location destinationFloor = new Location(Bukkit.getWorld(destinationCoord.getWorldName()), destinationCoord.getX() + 0.5, destinationCoord.getY() + 1, destinationCoord.getZ() + 0.5);
+                                destinationFloor.setDirection(entity.getLocation().getDirection());
+                                entity.teleport(destinationFloor, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                            }
                         }
                     }
                 });
             }
         }.runTaskLater(plugin, instantTeleport ? 0 : 50);
+    }
+
+    /**
+     * Handles the downward descent keeper in the destination beam, supporting both solo players and vehicles.
+     */
+    private static void startDestinationBeamKeeper(Main plugin, Player p, Entity vehicle, Entity travelEntity, Location tpLoc, Waypoint destinationWaypoint, WaypointCoord destinationCoord, WaypointPlayer finalWaypointPlayer, List<LivingEntity> leashedEntities, Location destinationFloor) {
+        new BukkitRunnable() {
+            int time = 0;
+
+            @Override
+            public void run() {
+                if (vehicle != null && !vehicle.isValid()) {
+                    p.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 600, 255, false, false));
+                    teleportAndReleashEntities(plugin, p, leashedEntities, destinationFloor);
+                    Objects.requireNonNull(finalWaypointPlayer).setTeleporting(false);
+                    this.cancel();
+                    return;
+                }
+
+                double currentY = travelEntity.getLocation().getY();
+                if (currentY > destinationWaypoint.getCoord().getY() + 1) {
+                    Location destinationBeamLoc = new Location(destinationCoord.getLocation().getWorld(), tpLoc.getX(), currentY, tpLoc.getZ());
+                    if (travelEntity.getLocation().distance(destinationBeamLoc) > 0.125) {
+                        destinationBeamLoc.setDirection(travelEntity.getLocation().getDirection());
+                        travelEntity.teleport(destinationBeamLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                        travelEntity.setVelocity(new Vector(0, -2, 0));
+                    } else if (!(travelEntity instanceof LivingEntity)) {
+                        // Apply manual downward velocity for non-living mounts (like boats or minecarts)
+                        travelEntity.setVelocity(new Vector(0, -0.5, 0));
+                    }
+                    time++;
+
+                    //let player go if they are stuck after 30 seconds
+                    if (time >= 80) {
+                        p.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 600, 255, false, false));
+                        if (vehicle instanceof LivingEntity) {
+                            ((LivingEntity) vehicle).addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 600, 255, false, false));
+                        }
+                        teleportAndReleashEntities(plugin, p, leashedEntities, destinationFloor);
+                        Objects.requireNonNull(finalWaypointPlayer).setTeleporting(false);
+                        this.cancel();
+                    }
+                } else {
+                    teleportAndReleashEntities(plugin, p, leashedEntities, destinationFloor);
+                    Objects.requireNonNull(finalWaypointPlayer).setTeleporting(false);
+                    this.cancel();
+                }
+            }
+        }.runTaskTimer(plugin, 0, 5);
+    }
+
+    /**
+     * Teleports a list of leashed entities to the destination floor and re-leashes them to the player.
+     */
+    private static void teleportAndReleashEntities(Main plugin, Player p, List<LivingEntity> leashedEntities, Location destinationFloor) {
+        for (LivingEntity leashed : leashedEntities) {
+            if (leashed.isValid()) {
+                leashed.teleport(destinationFloor, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                    if (leashed.isValid() && p.isOnline()) {
+                        leashed.setLeashHolder(p);
+                    }
+                }, 2L); // 2-tick delay ensures visual client sync and that chunks are loaded
+            }
+        }
+    }
+
+    /**
+     * Re-leashes entities to the player at their current location (used if teleportation cancels).
+     */
+    private static void releashEntitiesAtCurrentLocation(Main plugin, Player p, List<LivingEntity> leashedEntities) {
+        for (LivingEntity leashed : leashedEntities) {
+            if (leashed.isValid()) {
+                Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                    if (leashed.isValid() && p.isOnline()) {
+                        leashed.setLeashHolder(p);
+                    }
+                }, 2L);
+            }
+        }
     }
 
     /**
@@ -255,7 +450,7 @@ public class WaypointHelper {
                         if (invItem == null)
                             continue;
                         //check shulker boxes for items
-                        if (invItem.getType() == Material.SHULKER_BOX) {
+                        /*if (invItem.getType() == Material.SHULKER_BOX) {
                             ItemStack newShulkerBox = invItem.clone();
                             BlockStateMeta itemMeta = (BlockStateMeta) newShulkerBox.getItemMeta();
                             ShulkerBox shulker = (ShulkerBox) itemMeta.getBlockState();
@@ -278,7 +473,7 @@ public class WaypointHelper {
                                 newShulkerBox.setItemMeta(itemMeta);
                                 player.getInventory().setItem(invIndex, newShulkerBox);
                             }
-                        }
+                        }*/
                         if (invItem.getType() == requiredMaterial && (!matchName || invItem.getItemMeta().getDisplayName().equals(requiredName))) {
                             int slotAmount = invItem.getAmount();
                             if (itemCost > slotAmount) {
@@ -409,7 +604,7 @@ public class WaypointHelper {
                 if (invItem.getType() == requiredMaterial && (!matchName || invItem.getItemMeta().getDisplayName().equals(requiredName)))
                     count += invItem.getAmount();
 
-                //check shulker boxes for items
+                    //check shulker boxes for items
                 else if (invItem.getType() == Material.SHULKER_BOX) {
                     BlockStateMeta itemMeta = (BlockStateMeta) invItem.getItemMeta();
                     ShulkerBox shulker = (ShulkerBox) itemMeta.getBlockState();
